@@ -1,19 +1,42 @@
 #include "pcheck.h"
-#include <sys/types.h>
-#include <sys/stat.h>
+#include "PermissionChecker.h"
 #include <unistd.h>
-#include <pwd.h>
-#include <grp.h>
 #include <dirent.h>
-#include <iostream>
 #include <cstring>
+#include <stdlib.h>
 
 using namespace std;
 
-void permissionCheck(char* username, char* groupname, char* path) {
-	// get user info from name
+// prins absolute paths of all files and directories to, which can be written to
+// by the process with the given uid and gid. 
+void permissionCheck(const char* username, const char* groupname, const char* path) {
+	// get user info from name (no need to free)
+	struct passwd* userInfo = getUserInfo(username);
+	if (userInfo == nullptr) return;
+	
+	// get group info from name (no need to free)
+	struct group* groupInfo = getGroupInfo(groupname);
+	if (groupInfo == nullptr) return;
+	
+	// check iNode existance
+	struct stat* iNodeStat = getINodeStat(path);
+	if (iNodeStat == nullptr) return;
+	free(iNodeStat);
+	
+	// get absolute path
+	char* absolutePath = canonicalize_file_name(path);
+	
+	// run permission checking itself
+	isWritableRecursively(absolutePath, userInfo->pw_uid, groupInfo->gr_gid);
+	
+	// free allocated memory
+	free(absolutePath);
+}
+
+struct passwd* getUserInfo(const char* username, ostream& errorStream) {
 	errno = 0;
 	struct passwd* userInfo = getpwnam(username);
+	
 	if (userInfo == nullptr) {
 		switch (errno) {
 			case 0:
@@ -21,17 +44,21 @@ void permissionCheck(char* username, char* groupname, char* path) {
 			case ESRCH:
 			case EBADF:
 			case EPERM:
-				cout << "The given username was not found\n";
-				return;
+				errorStream << "The given username was not found\n";
+				return nullptr;
 			default:
-				perror("Problem with username: ");
-				return;
+				errorStream << "Problem with username: " << strerror(errno) << '\n';
+				return nullptr;
 		}
 	}
 	
-	// get group info from name
+	return userInfo;
+}
+
+struct group* getGroupInfo(const char* groupname, ostream& errorStream) {
 	errno = 0;
 	struct group* groupInfo = getgrnam(groupname);
+	
 	if (groupInfo == nullptr) {
 		switch (errno) {
 			case 0:
@@ -39,95 +66,78 @@ void permissionCheck(char* username, char* groupname, char* path) {
 			case ESRCH:
 			case EBADF:
 			case EPERM:
-				cout << "The given groupname was not found\n";
-				return;
+				errorStream << "The given groupname was not found\n";
+				return nullptr;
 			default:
-				perror("Problem with groupname: ");
-				return;
+				errorStream << "Problem with groupname: " << strerror(errno) << '\n';
+				return nullptr;
 		}
 	}
 	
-	// get inode information
-	struct stat iNodeStat;
-	int pathLength = strlen(path);
-	if (path[pathLength - 1] == '/') path[pathLength - 1] = '\0';
-	if (stat(path, &iNodeStat) < 0) {
+	return groupInfo;
+}
+
+struct stat* getINodeStat(const char* path, ostream& errorStream) {
+	errno = 0;
+	struct stat* iNodeStat = new struct stat();
+	
+	if (stat(path, iNodeStat) < 0) {
 		switch (errno) {
 			case EACCES:
-				cout << "Some part of path is not accessible by you. Try running from sudo!\n"; 
-				return;
+				errorStream << "Some part of path is not accessible by you. Try running from sudo!\n"; 
+				return nullptr;
 			case ENOENT:
 			case ENOTDIR:
-				cout << "Specified path does not exists or is invalid\n";
-				return;
+				errorStream << "Specified path does not exists or is invalid\n";
+				return nullptr;
 			default:
-				perror("Problem with path: ");
-				return;
+				errorStream << "Problem with path: " << strerror(errno) << '\n';
+				return nullptr;
 		}
 	}
 	
-	int userID = userInfo->pw_uid;
-	int groupID = groupInfo->gr_gid;
-	
-	isWritableRecursively(path, userID, groupID);
+	return iNodeStat;
 }
 
 void isWritableRecursively(const char* path, int uid, int gid) {
 	struct stat iNodeStat;
 	if (lstat(path, &iNodeStat) < 0) {
-		perror((string("Warning: could not read iNode: ") + string(path) + string(": ")).c_str());
+		cerr << "Warning: could not stat iNode " << path << ": " << strerror(errno) << '\n';
 		return;
 	}
-	//bool isLink = S_ISLNK(iNodeStat.st_mode);
+	
 	bool isFile = S_ISREG(iNodeStat.st_mode);
 	bool isDir = S_ISDIR(iNodeStat.st_mode);
 	if (isFile == false && isDir == false) return;
-	if (isWritable(iNodeStat, uid, gid)) {
+	
+	if (PermissionChecker::isWritable(iNodeStat, uid, gid)) {
 		cout << (isFile ? "f" : "d") << " " << path << '\n';
 	}
 	
 	// If we are allowed to read folder, read it
-	if (isDir && isExecutable(iNodeStat, uid, gid)) {
-		DIR* dir;
+	if (isDir && PermissionChecker::isExecutable(iNodeStat, uid, gid)) {
+		DIR* dir = opendir(path);
+		if (dir == nullptr) {
+			cerr << "Warning: could not read directory " << path << ": " << strerror(errno) << '\n';
+			return;
+		}
+
 		struct dirent* ent;
-		if ((dir = opendir(path)) != nullptr) {
-			while ((ent = readdir(dir)) != nullptr) {
-				if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
-					continue;
-				string newPath(path);
-				newPath.append("/");
-				newPath.append(ent->d_name);
-				isWritableRecursively(newPath.c_str(), uid, gid);
-			}
-			closedir(dir);
-		} 
-		else
-			perror((string("Warning: could not read directory ") + string(path) + string(": ")).c_str());
+		
+		while ((ent = readdir(dir)) != nullptr) {
+			if (isSelfOrParent(ent->d_name)) continue;
+			
+			string newPath(path);
+			if (newPath.back() != '/') newPath.append("/");
+			newPath.append(ent->d_name);
+			isWritableRecursively(newPath.c_str(), uid, gid);
+		}
+		
+		closedir(dir);	
 	}
 }
 
-bool isWritable(struct stat& iNode, int uid, int gid) {
-	if (uid == 0) return true; // if the user is root
-
-	// if the specified user is the owner of inode
-	if (iNode.st_uid == uid) return iNode.st_mode & S_IWUSR;
-	
-	// if the specified group is owner group
-	if (iNode.st_gid == gid) return iNode.st_mode & S_IWGRP;
-	
-	// otherwise
-	return iNode.st_mode & S_IWOTH;
-}
-
-bool isExecutable(struct stat& iNode, int uid, int gid) {
-	if (uid == 0) return true; // if the user is root
-
-	// if the specified user is the owner of inode
-	if (iNode.st_uid == uid) return iNode.st_mode & S_IXUSR;
-	
-	// if the specified group is owner group
-	if (iNode.st_gid == gid) return iNode.st_mode & S_IXGRP;
-	
-	// otherwise
-	return iNode.st_mode & S_IXOTH;
+// is directory entry equals to '.' or '..' ?
+bool isSelfOrParent(const char* path) {
+	return strcmp(path, ".") == 0 || strcmp(path, "..") == 0;
 }
