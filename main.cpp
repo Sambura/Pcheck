@@ -4,6 +4,7 @@
 #include <functional>
 #include <initializer_list>
 #include <vector>
+#include "pcheck.h"
 
 using namespace std;
 
@@ -51,25 +52,25 @@ int main(int argc, char* argv[]) {
 	
 	// read all CLI arguments and store their values
 	for (int i = 1; i < argc; i++) {
-		string* argString = new string(argv[i]);
+		string argString(argv[i]);
 		// check, whether we have such argument
-		if (argumentsMap.find(*argString) == argumentsMap.end()) {
-			cout << "Unknown argument: " << *argString << '\n';
+		if (argumentsMap.find(argString) == argumentsMap.end()) {
+			cout << "Unknown argument: " << argString << '\n';
 			return -1;
 		}
 		
-		CLIArgument* argument = argumentsMap[*argString];
+		CLIArgument* argument = argumentsMap[argString];
 		if (argument->value != nullptr) {
-			cout << "Error: the argument " << *argString << " was specified more than once\n";
+			cout << "Error: the argument " << argString << " was specified more than once\n";
 			return -1;
 		}
 		
 		if (++i >= argc) {
-			cout << "Error: the argument " << *argString << " is missing a value\n";
+			cout << "Error: the argument " << argString << " is missing a value\n";
 			return -1;
 		}
 		
-		argument->value = argString;
+		argument->value = argv[i];
 	}
 	
 	// Check the correctness of arguments
@@ -77,6 +78,8 @@ int main(int argc, char* argv[]) {
 		if (argument->verifier(*argument) == false) return -1;
 	}
 	
-	// run the tool
+	permissionCheck((char*)argumentsMap["--username"]->value,
+					(char*)argumentsMap["--groupname"]->value,
+					(char*)argumentsMap["--path"]->value);	
 	return 0;
 }
