@@ -1,4 +1,4 @@
-#include "pcheck.h"
+#include "INodeSelector.h"
 #include <iostream>
 #include <string>
 #include <unordered_map>
@@ -78,8 +78,16 @@ int main(int argc, char* argv[]) {
 		if (argument->verifier(*argument) == false) return -1;
 	}
 	
-	permissionCheck((char*)argumentsMap["--username"]->value,
-					(char*)argumentsMap["--groupname"]->value,
-					(char*)argumentsMap["--path"]->value);	
+	auto result = INodeSelector::getWritableINodes((char*)argumentsMap["--path"]->value,
+													(char*)argumentsMap["--username"]->value,
+													(char*)argumentsMap["--groupname"]->value,
+													&cerr);
+
+	if (result == nullptr) return -1;
+
+	for (string path : *result) {
+		cout << path << '\n';
+	}
+
 	return 0;
 }
