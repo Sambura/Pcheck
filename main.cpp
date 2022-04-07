@@ -1,45 +1,15 @@
 #include "INodeSelector.h"
-#include <iostream>
-#include <string>
+#include "SingleCStringArgument.h"
 #include <unordered_map>
-#include <functional>
-#include <initializer_list>
-#include <vector>
+#include <iostream>
 
 using namespace std;
 
-struct CLIArgument {
-public:
-	void* value = nullptr;
-	vector<string> aliasList;
-	function<bool(const CLIArgument&)> verifier;
-	
-	CLIArgument(function<bool(const CLIArgument&)> verifier,
-				initializer_list<string> aliases)
-		: verifier(verifier), aliasList(aliases) {}
-};
-
 int main(int argc, char* argv[]) {
 	vector<CLIArgument*> cliArguments = {
-		new CLIArgument(
-			[](const CLIArgument& argument) -> bool { 
-				if (argument.value != nullptr) return true;
-				cout << "Error: parameter 'username' was not specified. Use '-u <username>' for that\n";
-				return false;
-			}, {"-u", "--username"}
-		),
-		new CLIArgument(
-			[](const CLIArgument& argument) -> bool { 
-				if (argument.value != nullptr) return true;
-				cout << "Error: parameter 'group name' was not specified. Use '-g <groupname>' for that\n";
-				return false;
-			}, {"-g", "--groupname"}),
-		new CLIArgument(
-			[](const CLIArgument& argument) -> bool { 
-				if (argument.value != nullptr) return true;
-				cout << "Error: parameter 'path' was not specified. Use '-p <path>' for that\n";
-				return false;
-			}, {"-p", "--path"}),
+		new SingleCStringArgument("username", {"-u", "--username"}, 1, true, &cerr),
+		new SingleCStringArgument("groupname", {"-g", "--groupname"}, 1, true, &cerr),
+		new SingleCStringArgument("path", {"-p", "--path"}, 1, true, &cerr),
 	};
 	
 	// build argument map
@@ -59,28 +29,17 @@ int main(int argc, char* argv[]) {
 			return -1;
 		}
 		
-		CLIArgument* argument = argumentsMap[argString];
-		if (argument->value != nullptr) {
-			cout << "Error: the argument " << argString << " was specified more than once\n";
-			return -1;
-		}
-		
-		if (++i >= argc) {
-			cout << "Error: the argument " << argString << " is missing a value\n";
-			return -1;
-		}
-		
-		argument->value = argv[i];
+		if (argumentsMap[argString]->handleArgument(i, argc, argv) == false) return -1;
 	}
 	
 	// Check the correctness of arguments
 	for (CLIArgument* argument : cliArguments) {
-		if (argument->verifier(*argument) == false) return -1;
+		if (argument->isValid() == false) return -1;
 	}
 	
-	auto result = INodeSelector::getWritableINodes((char*)argumentsMap["--path"]->value,
-													(char*)argumentsMap["--username"]->value,
-													(char*)argumentsMap["--groupname"]->value,
+	auto result = INodeSelector::getWritableINodes((char*)argumentsMap["--path"]->getValue(),
+													(char*)argumentsMap["--username"]->getValue(),
+													(char*)argumentsMap["--groupname"]->getValue(),
 													&cerr);
 
 	if (result == nullptr) return -1;

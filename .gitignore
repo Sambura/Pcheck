@@ -34,3 +34,6 @@ pcheck
 
 # .vscode
 .vscode
+
+# cmake
+build
